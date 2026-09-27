@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Slingshot Golf 3D</title>
+  <meta name="description" content="A physics mini-golf game: pull back, let go, sink it." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #14213d;
+      --card: rgba(255, 255, 255, 0.88);
+      --accent: #ff4d6d;
+      --good: #1fa37a;
+      --gold: #ffb400;
+      --shadow: 0 6px 20px rgba(20, 33, 61, 0.18);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d7ff; }
+    body {
+      font-family: 'Fredoka', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      color: var(--ink);
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+    .hidden { display: none !important; }
+    button { font: inherit; color: inherit; cursor: pointer; border: 0; }
+
+    #hud {
+      position: fixed; top: 12px; left: 16px; right: 16px;
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
+      pointer-events: none;
+    }
+    .card {
+      background: var(--card); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      border-radius: 16px; padding: 8px 14px; box-shadow: var(--shadow);
+    }
+    .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
+    .big { font-size: 26px; font-weight: 700; line-height: 1.1; }
+    .big small { font-size: 15px; opacity: 0.5; font-weight: 600; }
+    #holeName { font-size: 13px; font-weight: 600; opacity: 0.8; }
+    .stats { display: flex; gap: 16px; text-align: center; }
+    #total { color: var(--accent); }
+
+    #dock {
+      position: fixed; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+      display: flex; gap: 8px; align-items: center;
+    }
+    .seg { display: flex; background: var(--card); border-radius: 999px; padding: 4px; box-shadow: var(--shadow); }
+    .seg button { background: transparent; padding: 8px 18px; border-radius: 999px; font-weight: 600; font-size: 15px; }
+    .seg button.active { background: var(--ink); color: #fff; }
+    .icon-btn {
+      width: 44px; height: 44px; border-radius: 50%; background: var(--card); box-shadow: var(--shadow);
+      display: grid; place-items: center;
+    }
+    .icon-btn svg { width: 20px; height: 20px; }
+    #mute .off { display: none; }
+    #mute.muted .on { display: none; }
+    #mute.muted .off { display: block; }
+
+    #power {
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      width: min(260px, 60vw); height: 12px; border-radius: 999px; background: rgba(20, 33, 61, 0.25);
+      overflow: hidden; pointer-events: none;
+    }
+    #powerFill { height: 100%; width: 0; border-radius: 999px; }
+
+    #hint {
+      position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%);
+      background: rgba(20, 33, 61, 0.75); color: #fff; padding: 8px 14px; border-radius: 999px;
+      font-size: 14px; white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis;
+      pointer-events: none; animation: bob 1.6s ease-in-out infinite;
+    }
+    @keyframes bob { 50% { transform: translate(-50%, -4px); } }
+
+    #banner {
+      position: fixed; top: 26%; left: 50%; transform: translate(-50%, -50%) scale(0.6);
+      text-align: center; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.25s cubic-bezier(.2, 1.6, .4, 1);
+      color: #fff; text-shadow: 0 3px 0 rgba(20, 33, 61, 0.35), 0 8px 24px rgba(20, 33, 61, 0.35);
+      width: calc(100vw - 32px);
+    }
+    #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    #bannerTitle { font-size: clamp(34px, 8vw, 64px); font-weight: 700; line-height: 1; }
+    #bannerSub { font-size: clamp(16px, 3.5vw, 22px); font-weight: 600; margin-top: 6px; }
+    #banner.great #bannerTitle { color: var(--gold); }
+    #banner.bad #bannerTitle { color: #ffd6dd; }
+
+    .overlay {
+      position: fixed; inset: 0; display: grid; place-items: center; padding: 16px;
+      background: radial-gradient(ellipse at center, rgba(20, 33, 61, 0.15), rgba(20, 33, 61, 0.55));
+    }
+    .panel {
+      background: #fff; border-radius: 24px; padding: 28px 24px; box-shadow: 0 20px 60px rgba(20, 33, 61, 0.35);
+      max-width: 420px; width: 100%; text-align: center;
+    }
+    .panel h1 { margin: 0; font-size: clamp(34px, 9vw, 46px); line-height: 1; }
+    .panel h1 span { color: var(--accent); }
+    .panel p { margin: 10px 0 0; opacity: 0.75; }
+    .how { text-align: left; margin: 20px 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 15px; }
+    .how li { display: flex; gap: 10px; align-items: baseline; }
+    .how b { flex: 0 0 auto; background: #eef3ff; border-radius: 8px; padding: 2px 8px; font-size: 13px; }
+    .cta {
+      background: var(--accent); color: #fff; font-weight: 700; font-size: 20px; padding: 14px 36px; border-radius: 999px;
+      box-shadow: 0 6px 0 #c7304d; transition: transform 0.08s, box-shadow 0.08s;
+    }
+    .cta:active { transform: translateY(4px); box-shadow: 0 2px 0 #c7304d; }
+    #titleBest, #cardBest { margin-top: 14px; font-size: 14px; font-weight: 600; opacity: 0.7; }
+    #cardBest.pb { color: var(--good); opacity: 1; }
+
+    .table-wrap { overflow-x: auto; margin: 18px 0 6px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { padding: 6px 4px; text-align: center; }
+    th { text-align: left; opacity: 0.6; font-weight: 600; }
+    tr.head td { opacity: 0.6; font-weight: 600; }
+    tr + tr { border-top: 1px solid #eef0f5; }
+    td span { display: inline-grid; place-items: center; min-width: 24px; height: 24px; border-radius: 6px; }
+    td span.under { background: #d9f5ea; color: var(--good); font-weight: 700; }
+    td span.ace { background: var(--gold); color: #fff; font-weight: 700; border-radius: 50%; }
+    td span.over { background: #ffe3e8; color: #c7304d; }
+    #cardTotal { font-size: 48px; font-weight: 700; color: var(--accent); line-height: 1; margin-top: 4px; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="card">
+      <div class="label">Hole</div>
+      <div class="big"><span id="holeNum">1</span><small id="holeTotal">/9</small></div>
+      <div id="holeName"></div>
+    </div>
+    <div class="card stats">
+      <div><div class="label">Par</div><div class="big" id="par">2</div></div>
+      <div><div class="label">Strokes</div><div class="big" id="strokes">0</div></div>
+      <div><div class="label">Total</div><div class="big" id="total">E</div></div>
+    </div>
+  </div>
+
+  <div id="power" class="hidden"><div id="powerFill"></div></div>
+  <div id="hint" class="hidden"></div>
+  <div id="banner"><div id="bannerTitle"></div><div id="bannerSub"></div></div>
+
+  <div id="dock" class="hidden">
+    <button class="icon-btn" id="restart" title="Restart round" aria-label="Restart round">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+    </button>
+    <div class="seg" role="group" aria-label="Shot type">
+      <button id="modePutt" class="active" title="Putt: rolls along the ground (C / Space to switch)">Putt</button>
+      <button id="modeChip" title="Chip: lofted shot that flies over gaps (C / Space to switch)">Chip</button>
+    </div>
+    <button class="icon-btn" id="mute" title="Sound" aria-label="Mute sound" aria-pressed="false">
+      <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6"/><path d="m22 9-6 6"/></svg>
+    </button>
+  </div>
+
+  <div id="title" class="overlay">
+    <div class="panel">
+      <h1>Slingshot <span>Golf</span></h1>
+      <p>Nine floating holes. Pull back, let go, sink it.</p>
+      <ul class="how">
+        <li><b>Drag &amp; release</b> Pull back from anywhere to aim and set power</li>
+        <li><b>Putt / Chip</b> Roll it, or loft it over gaps (C or Space)</li>
+        <li><b>Right-drag</b> Look around · two fingers on touch · A/D keys</li>
+        <li><b>Water</b> Costs a stroke and puts you back</li>
+      </ul>
+      <button class="cta" id="play">Tee off</button>
+      <div id="titleBest"></div>
+    </div>
+  </div>
+
+  <div id="scorecard" class="overlay hidden">
+    <div class="panel">
+      <div class="label">Final score</div>
+      <div id="cardTotal">E</div>
+      <div class="table-wrap"><table id="cardTable"></table></div>
+      <div id="cardBest"></div>
+      <div style="margin-top: 18px"><button class="cta" id="again">Play again</button></div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
