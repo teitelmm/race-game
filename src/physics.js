@@ -4,8 +4,12 @@ export const BALL_R = 0.2;
 export const HOLE_R = 0.34;
 export const GRAVITY = 22;
 
-const ROLL_FRICTION = 2.2;
-const ROLL_DRAG = 0.55;
+// Rolling loses speed mostly in proportion to speed, so roll distance tracks shot power
+// almost linearly; a stronger grip below SETTLE_SPEED ends the roll crisply.
+const ROLL_FRICTION = 0.9;
+const ROLL_DRAG = 0.5;
+const SETTLE_SPEED = 1.2;
+const SETTLE_FRICTION = 2.4;
 const Y = new THREE.Vector3(0, 1, 0);
 
 const _local = new THREE.Vector3();
@@ -82,7 +86,7 @@ function collideBox(ball, c, events) {
     _rel.addScaledVector(_n, -(1 + e) * vn);
     if (floor && -vn > 2.5) {
       // Hard landings bite into the turf and scrub off some roll.
-      const keep = 1 - Math.min(0.35, 0.02 * -vn);
+      const keep = 1 - Math.min(0.25, 0.015 * -vn);
       const along = _rel.dot(_n);
       _rel.addScaledVector(_n, -along).multiplyScalar(keep).addScaledVector(_n, along);
     }
@@ -139,7 +143,7 @@ export function stepBall(ball, world, dt, events) {
   let fr = ROLL_FRICTION * friction, drag = ROLL_DRAG, boosting = false;
   for (const t of world.triggers) {
     if (!inTrigger(t, p)) continue;
-    if (t.kind === 'sand') { fr += 14; drag += 3; }
+    if (t.kind === 'sand') { fr += 10; drag += 2.5; }
     else if (t.kind === 'boost') {
       v.x += t.ax * t.power * dt;
       v.z += t.az * t.power * dt;
@@ -161,6 +165,7 @@ export function stepBall(ball, world, dt, events) {
   const vn = v.dot(n);
   const tx = v.x - n.x * vn, ty = v.y - n.y * vn, tz = v.z - n.z * vn;
   const s = Math.hypot(tx, ty, tz);
+  if (s < SETTLE_SPEED) fr += SETTLE_FRICTION;
   if (s > 0) {
     const k = Math.max(0, s - (fr + drag * s) * dt) / s;
     v.set(tx * k + n.x * vn, ty * k + n.y * vn, tz * k + n.z * vn);

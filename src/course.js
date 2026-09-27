@@ -73,7 +73,7 @@ function slab(ctx, w, len, pos, quat) {
   mesh.quaternion.copy(quat);
   mesh.receiveShadow = true;
   ctx.group.add(mesh);
-  ctx.colliders.push(makeBox({ pos: pos.clone(), quat, half: new THREE.Vector3(w / 2, THICK / 2, len / 2), bounce: 0.25 }));
+  ctx.colliders.push(makeBox({ pos: pos.clone(), quat, half: new THREE.Vector3(w / 2, THICK / 2, len / 2), bounce: 0.35 }));
 }
 
 const builders = {
@@ -104,7 +104,7 @@ const builders = {
     mesh.quaternion.copy(quat);
     mesh.castShadow = mesh.receiveShadow = true;
     ctx.group.add(mesh);
-    ctx.colliders.push(makeBox({ pos, quat, half: new THREE.Vector3(0.15, p.h / 2, len / 2 + 0.15), bounce: 0.65, kind: 'wall' }));
+    ctx.colliders.push(makeBox({ pos, quat, half: new THREE.Vector3(0.15, p.h / 2, len / 2 + 0.15), bounce: 0.8, kind: 'wall' }));
   },
 
   bumper(ctx, p) {
@@ -118,7 +118,7 @@ const builders = {
     g.add(body, cap);
     g.position.set(p.x, p.y, p.z);
     ctx.group.add(g);
-    const c = makeCylinder({ pos: new THREE.Vector3(p.x, p.y, p.z), radius: p.r, height: 0.6, bounce: 0.9, kick: 3.5 });
+    const c = makeCylinder({ pos: new THREE.Vector3(p.x, p.y, p.z), radius: p.r, height: 0.6, bounce: 0.9, kick: 5 });
     c.mesh = g;
     c.flash = 0;
     ctx.colliders.push(c);
@@ -135,7 +135,7 @@ const builders = {
     hub.position.set(p.x, p.y + 0.35, p.z);
     hub.castShadow = true;
     ctx.group.add(blade, hub);
-    const c = makeBox({ pos, half: new THREE.Vector3(p.len / 2, 0.2, 0.15), bounce: 0.5, kind: 'wall', spin: p.speed });
+    const c = makeBox({ pos, half: new THREE.Vector3(p.len / 2, 0.2, 0.15), bounce: 0.7, kind: 'wall', spin: p.speed });
     c.mesh = blade;
     ctx.colliders.push(c);
     ctx.colliders.push(makeCylinder({ pos: new THREE.Vector3(p.x, p.y, p.z), radius: 0.28, height: 0.7, bounce: 0.5, kind: 'wall' }));

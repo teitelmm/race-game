@@ -103,3 +103,51 @@ export function splash() {
 export function click() {
   tone(880, 0, 0.04, 'square', 0.05);
 }
+
+let hum = null;
+let lastTick = -1;
+
+export function chargeStart() {
+  if (!ctx || hum) return;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = 'triangle';
+  o.frequency.value = 140;
+  g.gain.value = 0.0001;
+  g.gain.exponentialRampToValueAtTime(0.035, ctx.currentTime + 0.05);
+  o.connect(g).connect(master);
+  o.start();
+  hum = { o, g };
+  lastTick = -1;
+}
+
+export function chargeSet(power) {
+  if (!ctx || !hum) return;
+  hum.o.frequency.setTargetAtTime(140 + power * 360, ctx.currentTime, 0.03);
+  const step = Math.floor(power * 10);
+  if (step !== lastTick) {
+    if (step > lastTick && step > 0) tone(420 + step * 70, 0, 0.035, 'square', 0.045);
+    lastTick = step;
+  }
+}
+
+export function chargeStop() {
+  if (!ctx || !hum) return;
+  const { o, g } = hum;
+  g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.02);
+  o.stop(ctx.currentTime + 0.1);
+  hum = null;
+}
+
+export function maxPower() {
+  tone(1200, 1800, 0.12, 'square', 0.08);
+}
+
+export function whoosh(power) {
+  noise(0.35, 0.12 + power * 0.18, 1400, 'bandpass');
+}
+
+export function lipOut() {
+  tone(700, 380, 0.12, 'square', 0.1);
+  tone(500, 260, 0.14, 'triangle', 0.12, 0.05);
+}

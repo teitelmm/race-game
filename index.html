@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Slingshot Golf 3D</title>
   <meta name="description" content="A physics mini-golf game: pull back, let go, sink it." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,10 +12,13 @@
     :root {
       --ink: #14213d;
       --card: rgba(255, 255, 255, 0.88);
+      --panel: #ffffff;
+      --well: #eef2fa;
       --accent: #ff4d6d;
       --good: #1fa37a;
-      --gold: #ffb400;
+      --gold: #ffc53d;
       --shadow: 0 6px 20px rgba(20, 33, 61, 0.18);
+      --ball: #f5f5ef;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d7ff; }
@@ -29,9 +32,10 @@
     #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
     .hidden { display: none !important; }
     button { font: inherit; color: inherit; cursor: pointer; border: 0; }
+    button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 
     #hud {
-      position: fixed; top: 12px; left: 16px; right: 16px;
+      position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px;
       display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
       pointer-events: none;
     }
@@ -40,39 +44,57 @@
       border-radius: 16px; padding: 8px 14px; box-shadow: var(--shadow);
     }
     .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
-    .big { font-size: 26px; font-weight: 700; line-height: 1.1; }
+    .big { font-size: 26px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
     .big small { font-size: 15px; opacity: 0.5; font-weight: 600; }
     #holeName { font-size: 13px; font-weight: 600; opacity: 0.8; }
     .stats { display: flex; gap: 16px; text-align: center; }
-    #total { color: var(--accent); }
 
     #dock {
-      position: fixed; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+      position: fixed; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
       display: flex; gap: 8px; align-items: center;
     }
     .seg { display: flex; background: var(--card); border-radius: 999px; padding: 4px; box-shadow: var(--shadow); }
     .seg button { background: transparent; padding: 8px 18px; border-radius: 999px; font-weight: 600; font-size: 15px; }
-    .seg button.active { background: var(--ink); color: #fff; }
+    .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
     .icon-btn {
       width: 44px; height: 44px; border-radius: 50%; background: var(--card); box-shadow: var(--shadow);
-      display: grid; place-items: center;
+      display: grid; place-items: center; flex: 0 0 auto;
     }
     .icon-btn svg { width: 20px; height: 20px; }
     .icon-btn.armed { background: var(--accent); color: #fff; }
-    .icon-btn:focus-visible, .seg button:focus-visible, .cta:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+    #ballBtn .dot { width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff 0 12%, var(--ball) 45%, color-mix(in srgb, var(--ball) 70%, #000) 100%); box-shadow: inset 0 0 0 1px rgba(20, 33, 61, 0.15); }
     #mute .off { display: none; }
     #mute.muted .on { display: none; }
     #mute.muted .off { display: block; }
 
-    #power {
-      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-      width: min(260px, 60vw); height: 12px; border-radius: 999px; background: rgba(20, 33, 61, 0.25);
-      overflow: hidden; pointer-events: none;
+    #powerTag {
+      position: fixed; transform: translate(-50%, -50%); pointer-events: none;
+      background: var(--power, #fff); color: var(--ink); font-weight: 700; font-size: 20px; line-height: 1;
+      padding: 7px 14px; border-radius: 999px; box-shadow: var(--shadow); min-width: 70px; text-align: center;
+      font-variant-numeric: tabular-nums;
     }
-    #powerFill { height: 100%; width: 0; border-radius: 999px; }
+    #powerTag.max { background: #ff3b3b; color: #fff; animation: throb 0.18s ease-in-out infinite alternate; }
+    @keyframes throb { to { transform: translate(-50%, -50%) scale(1.15); } }
+
+    #pops { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+    .pop {
+      position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+      font-weight: 700; font-size: 22px; color: #fff; letter-spacing: 0.01em;
+      text-shadow: 0 2px 0 rgba(20, 33, 61, 0.5), 0 4px 14px rgba(20, 33, 61, 0.3);
+      animation: pop 0.9s ease-out forwards;
+    }
+    .pop.hot { color: var(--gold); font-size: 28px; }
+    .pop.boing { color: #ff9fb2; }
+    .pop.boost { color: #ffb347; }
+    @keyframes pop {
+      0% { opacity: 0; transform: translate(-50%, -30%) scale(0.5); }
+      15% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+      30% { transform: translate(-50%, -60%) scale(1); }
+      100% { opacity: 0; transform: translate(-50%, -170%) scale(1); }
+    }
 
     #hint {
-      position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%);
+      position: fixed; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
       background: rgba(20, 33, 61, 0.75); color: #fff; padding: 8px 14px; border-radius: 999px;
       font-size: 14px; white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis;
       pointer-events: none; animation: bob 1.6s ease-in-out infinite;
@@ -86,44 +108,100 @@
       width: calc(100vw - 32px);
     }
     #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    #bannerTitle { font-size: clamp(34px, 8vw, 64px); font-weight: 700; line-height: 1; }
+    #bannerTitle { font-size: clamp(34px, 8vw, 64px); font-weight: 700; line-height: 1; text-wrap: balance; }
     #bannerSub { font-size: clamp(16px, 3.5vw, 22px); font-weight: 600; margin-top: 6px; }
     #banner.great #bannerTitle { color: var(--gold); }
     #banner.bad #bannerTitle { color: #ffd6dd; }
+    #bannerTags { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+    #bannerTags:empty { display: none; }
+    #bannerTags span {
+      background: var(--gold); color: var(--ink); text-shadow: none; font-weight: 700; font-size: 16px;
+      padding: 5px 14px; border-radius: 999px; box-shadow: 0 3px 0 rgba(20, 33, 61, 0.25);
+    }
+    #bannerTags span:nth-child(odd) { transform: rotate(-3deg); }
+    #bannerTags span:nth-child(even) { transform: rotate(2deg); }
 
     .overlay {
       position: fixed; inset: 0; display: grid; place-items: center; padding: 16px;
       background: radial-gradient(ellipse at center, rgba(20, 33, 61, 0.15), rgba(20, 33, 61, 0.55));
     }
     .panel {
-      background: #fff; border-radius: 24px; padding: 28px 24px; box-shadow: 0 20px 60px rgba(20, 33, 61, 0.35);
-      max-width: 420px; width: 100%; text-align: center;
+      background: var(--panel); border-radius: 24px; padding: 28px 24px; box-shadow: 0 20px 60px rgba(20, 33, 61, 0.35);
+      max-width: 420px; width: 100%; text-align: center; max-height: calc(100dvh - 32px); overflow-y: auto;
     }
-    .panel h1 { margin: 0; font-size: clamp(34px, 9vw, 46px); line-height: 1; }
+    .panel h1 { margin: 0; font-size: clamp(34px, 9vw, 46px); line-height: 1; text-wrap: balance; }
     .panel h1 span { color: var(--accent); }
     .panel p { margin: 10px 0 0; opacity: 0.75; }
     .how { text-align: left; margin: 20px 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 15px; }
     .how li { display: flex; gap: 10px; align-items: baseline; }
-    .how b { flex: 0 0 auto; background: #eef3ff; border-radius: 8px; padding: 2px 8px; font-size: 13px; }
+    .how b { flex: 0 0 auto; background: var(--well); border-radius: 8px; padding: 2px 8px; font-size: 13px; }
+    .actions { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
     .cta {
       background: var(--accent); color: #fff; font-weight: 700; font-size: 20px; padding: 14px 36px; border-radius: 999px;
       box-shadow: 0 6px 0 #c7304d; transition: transform 0.08s, box-shadow 0.08s;
     }
     .cta:active { transform: translateY(4px); box-shadow: 0 2px 0 #c7304d; }
+    .ghost {
+      background: var(--well); font-weight: 600; font-size: 16px; padding: 12px 18px; border-radius: 999px;
+      display: inline-flex; gap: 8px; align-items: center;
+    }
+    .ghost .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--ball); box-shadow: inset 0 0 0 1px rgba(20, 33, 61, 0.2); }
     #titleBest, #cardBest { margin-top: 14px; font-size: 14px; font-weight: 600; opacity: 0.7; }
     #cardBest.pb { color: var(--good); opacity: 1; }
 
     .table-wrap { overflow-x: auto; margin: 18px 0 6px; }
-    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
     th, td { padding: 6px 4px; text-align: center; }
     th { text-align: left; opacity: 0.6; font-weight: 600; }
     tr.head td { opacity: 0.6; font-weight: 600; }
     tr + tr { border-top: 1px solid #eef0f5; }
     td span { display: inline-grid; place-items: center; min-width: 24px; height: 24px; border-radius: 6px; }
     td span.under { background: #d9f5ea; color: var(--good); font-weight: 700; }
-    td span.ace { background: var(--gold); color: #fff; font-weight: 700; border-radius: 50%; }
+    td span.ace { background: var(--gold); color: var(--ink); font-weight: 700; border-radius: 50%; }
     td span.over { background: #ffe3e8; color: #c7304d; }
     #cardTotal { font-size: 48px; font-weight: 700; color: var(--accent); line-height: 1; margin-top: 4px; }
+
+    /* ---------- Pro Shop (ball customization) ---------- */
+    #locker .panel { max-width: 720px; text-align: left; padding: 22px; display: grid; gap: 20px; grid-template-columns: 220px 1fr; }
+    .shop-stage {
+      display: flex; flex-direction: column; align-items: center; gap: 10px; align-self: start;
+      background: radial-gradient(circle at 50% 42%, #ffffff 0, #e4edff 55%, #cfdcf7 100%);
+      border-radius: 20px; padding: 16px 12px 18px;
+    }
+    #lockerPreview { width: 100%; max-width: 190px; aspect-ratio: 1; display: block; }
+    #lockerName { font-weight: 700; font-size: 18px; text-align: center; text-wrap: balance; }
+    .shop-title { margin: 0; font-size: 28px; line-height: 1; }
+    .shop-title span { color: var(--accent); }
+    .shop-options { display: grid; gap: 16px; align-content: start; min-width: 0; }
+    .shop-group { display: grid; gap: 8px; }
+    .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+    .swatch {
+      width: 34px; height: 34px; border-radius: 50%; background: var(--swatch);
+      box-shadow: inset 0 0 0 1px rgba(20, 33, 61, 0.2); transition: transform 0.1s;
+    }
+    .swatch[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--panel), 0 0 0 5px var(--ink); transform: scale(1.05); }
+    .patterns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .pattern {
+      background: var(--well); border-radius: 14px; padding: 8px 4px 6px; display: grid; justify-items: center; gap: 2px;
+      font-size: 13px; font-weight: 600; transition: transform 0.1s;
+    }
+    .pattern canvas { width: 48px; height: 48px; }
+    .pattern[aria-pressed="true"] { background: var(--ink); color: #fff; }
+    .pattern:active, .swatch:active { transform: scale(0.94); }
+    .shop-options .seg { background: var(--well); box-shadow: none; flex-wrap: wrap; }
+    .shop-options .seg button { flex: 1 1 auto; padding: 8px 12px; }
+    .shop-done { justify-self: end; font-size: 18px; padding: 12px 30px; }
+    @media (max-width: 640px) {
+      #locker .panel { grid-template-columns: 1fr; padding: 18px 16px; gap: 14px; }
+      .shop-stage { flex-direction: row; justify-content: center; padding: 10px; }
+      #lockerPreview { width: 120px; }
+      #lockerName { text-align: left; }
+      .shop-done { justify-self: stretch; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #hint { animation: none; }
+      #powerTag.max { animation: none; }
+    }
   </style>
   <script type="importmap">
     {
@@ -150,18 +228,20 @@
     </div>
   </div>
 
-  <div id="power" class="hidden"><div id="powerFill"></div></div>
+  <div id="pops"></div>
+  <div id="powerTag" class="hidden"></div>
   <div id="hint" class="hidden"></div>
-  <div id="banner"><div id="bannerTitle"></div><div id="bannerSub"></div></div>
+  <div id="banner"><div id="bannerTitle"></div><div id="bannerSub"></div><div id="bannerTags"></div></div>
 
   <div id="dock" class="hidden">
     <button class="icon-btn" id="restart" title="Restart round" aria-label="Restart round">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
     </button>
     <div class="seg" role="group" aria-label="Shot type">
-      <button id="modePutt" class="active" title="Putt: rolls along the ground (C / Space to switch)">Putt</button>
-      <button id="modeChip" title="Chip: lofted shot that flies over gaps (C / Space to switch)">Chip</button>
+      <button id="modePutt" aria-pressed="true" title="Putt: rolls along the ground (C / Space to switch)">Putt</button>
+      <button id="modeChip" aria-pressed="false" title="Chip: lofted shot that flies over gaps (C / Space to switch)">Chip</button>
     </div>
+    <button class="icon-btn" id="ballBtn" title="Customize ball" aria-label="Customize ball"><span class="dot"></span></button>
     <button class="icon-btn" id="mute" title="Sound" aria-label="Mute sound" aria-pressed="false">
       <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
       <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6"/><path d="m22 9-6 6"/></svg>
@@ -173,12 +253,15 @@
       <h1>Slingshot <span>Golf</span></h1>
       <p>Nine floating holes. Pull back, let go, sink it.</p>
       <ul class="how">
-        <li><b>Drag &amp; release</b> Pull back from anywhere to aim and set power</li>
+        <li><b>Drag &amp; release</b> Pull back from anywhere. The further you pull, the harder you hit</li>
         <li><b>Putt / Chip</b> Roll it, or loft it over gaps (C or Space)</li>
         <li><b>Right-drag</b> Look around · two fingers on touch · A/D keys</li>
-        <li><b>Water</b> Costs a stroke and puts you back</li>
+        <li><b>Trick shots</b> Bank it, bounce it, dunk it for bonus callouts</li>
       </ul>
-      <button class="cta" id="play">Tee off</button>
+      <div class="actions">
+        <button class="cta" id="play">Tee off</button>
+        <button class="ghost" id="titleBall"><span class="dot"></span>Customize ball</button>
+      </div>
       <div id="titleBest"></div>
     </div>
   </div>
@@ -190,6 +273,23 @@
       <div class="table-wrap"><table id="cardTable"></table></div>
       <div id="cardBest"></div>
       <div style="margin-top: 18px"><button class="cta" id="again">Play again</button></div>
+    </div>
+  </div>
+
+  <div id="locker" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="lockerHeading">
+    <div class="panel">
+      <div class="shop-stage">
+        <canvas id="lockerPreview"></canvas>
+        <div id="lockerName"></div>
+      </div>
+      <div class="shop-options">
+        <h2 class="shop-title" id="lockerHeading">Pro <span>Shop</span></h2>
+        <div class="shop-group"><div class="label">Color</div><div class="swatches" id="lockerColors"></div></div>
+        <div class="shop-group"><div class="label">Pattern</div><div class="patterns" id="lockerPatterns"></div></div>
+        <div class="shop-group"><div class="label">Finish</div><div class="seg" id="lockerFinish" role="group" aria-label="Finish"></div></div>
+        <div class="shop-group"><div class="label">Trail</div><div class="seg" id="lockerTrail" role="group" aria-label="Trail"></div></div>
+        <button class="cta shop-done" id="lockerDone">Done</button>
+      </div>
     </div>
   </div>
 

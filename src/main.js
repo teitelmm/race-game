@@ -1,16 +1,26 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { LEVELS } from './levels.js';
 import { buildLevel, animateCourse, disposeLevel } from './course.js';
 import { BALL_R, HOLE_R, makeBall, stepBall, updateMovers } from './physics.js';
 import * as sfx from './audio.js';
+import {
+  loadStyle, saveStyle, colorHex, createBallTexture, createDimpleTexture, createBallMaterial, paintBallTexture, styleMaterial,
+} from './ball.js';
+import { Trail, Shockwaves, Particles, createAimRing, popup } from './fx.js';
+import { createLocker } from './locker.js';
 
 const STEP = 1 / 240;
-const MAX_SPEED = { putt: 18, chip: 16 };
-const CHIP_ANGLE = 0.8;
+const MAX_SPEED = { putt: 20, chip: 17 };
+const CHIP_ANGLE = 0.7;
+const CAPTURE_SPEED = 7;
 const MAX_STROKES = 10;
 const WATER_Y = -3;
-const PREVIEW_DOTS = 28;
+const FULL_PULL = 0.36; // fraction of the shorter screen side for a full-power pull
+const PREVIEW_DOTS = 32;
+const PREVIEW_DT = 1 / 120;
+const PREVIEW_STRIDE = 4;
 const BEST_KEY = 'slingshot-golf-best';
 
 const $ = (id) => document.getElementById(id);
@@ -82,22 +92,40 @@ const clouds = new THREE.Group();
   scene.add(clouds);
 }
 
-// ---------- ball & aim visuals ----------
-const ballMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(BALL_R, 32, 20),
-  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 }),
-);
+// ---------- the ball ----------
+const ballStyle = loadStyle();
+const ballTex = createBallTexture(ballStyle);
+const ballMat = createBallMaterial(ballTex, createDimpleTexture());
+ballMat.envMap = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+
+// The pivot faces along the ball's travel so it can squash and stretch; the mesh inside rolls.
+const ballPivot = new THREE.Group();
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 48, 28), ballMat);
 ballMesh.castShadow = true;
-scene.add(ballMesh);
+ballPivot.add(ballMesh);
+const glowLight = new THREE.PointLight(0xffffff, 0, 3, 2);
+ballPivot.add(glowLight);
+scene.add(ballPivot);
 
-const readyRing = new THREE.Mesh(
-  new THREE.RingGeometry(0.3, 0.38, 40).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false }),
-);
-scene.add(readyRing);
+const trail = new Trail();
+scene.add(trail.mesh);
 
-const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false });
-const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.055, 10, 8), dotMat, PREVIEW_DOTS);
+function applyBallStyle(changed) {
+  if (changed === 'color' || changed === 'pattern') paintBallTexture(ballTex, ballStyle);
+  styleMaterial(ballMat, ballStyle);
+  trail.setStyle(ballStyle.trail, colorHex(ballStyle));
+  glowLight.color.set(colorHex(ballStyle));
+  glowLight.intensity = ballStyle.finish === 'glow' ? 4 : 0;
+  document.documentElement.style.setProperty('--ball', colorHex(ballStyle));
+}
+applyBallStyle();
+
+// ---------- aim visuals ----------
+const aimRing = createAimRing();
+scene.add(aimRing);
+
+const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthWrite: false });
+const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.06, 10, 8), dotMat, PREVIEW_DOTS);
 dots.frustumCulled = false;
 dots.visible = false;
 scene.add(dots);
@@ -105,61 +133,15 @@ scene.add(dots);
 const bandMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const band = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1, 8).translate(0, 0.5, 0).rotateX(Math.PI / 2), bandMat);
 const handle = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), bandMat);
-band.visible = handle.visible = false;
-scene.add(band, handle);
-
-// ---------- particles ----------
-const MAX_PARTICLES = 220;
-const particles = [];
-const partMesh = new THREE.InstancedMesh(
-  new THREE.PlaneGeometry(0.14, 0.09),
-  new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
-  MAX_PARTICLES,
+const landMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.16, 0.26, 36).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthWrite: false }),
 );
-partMesh.frustumCulled = false;
-partMesh.count = 0;
-scene.add(partMesh);
+band.visible = handle.visible = landMarker.visible = false;
+scene.add(band, handle, landMarker);
 
-function burst(pos, count, colors, speed, lift) {
-  const c = new THREE.Color();
-  for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const s = speed * (0.4 + Math.random() * 0.6);
-    particles.push({
-      pos: pos.clone(),
-      vel: new THREE.Vector3(Math.cos(a) * s, lift * (0.6 + Math.random() * 0.8), Math.sin(a) * s),
-      rot: new THREE.Euler(Math.random() * 6, Math.random() * 6, 0),
-      spin: (Math.random() - 0.5) * 12,
-      life: 1.6 + Math.random() * 1.2,
-      color: c.set(colors[i % colors.length]).clone(),
-    });
-  }
-}
-
-const _m4 = new THREE.Matrix4();
-const _q = new THREE.Quaternion();
-const _one = new THREE.Vector3(1, 1, 1);
-function updateParticles(dt) {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.life -= dt;
-    if (p.life <= 0) { particles.splice(i, 1); continue; }
-    p.vel.y -= 9 * dt;
-    p.vel.multiplyScalar(1 - dt * 0.8);
-    p.pos.addScaledVector(p.vel, dt);
-    p.rot.x += p.spin * dt;
-    p.rot.y += p.spin * 0.7 * dt;
-  }
-  particles.forEach((p, i) => {
-    _q.setFromEuler(p.rot);
-    _m4.compose(p.pos, _q, _one);
-    partMesh.setMatrixAt(i, _m4);
-    partMesh.setColorAt(i, p.color);
-  });
-  partMesh.count = particles.length;
-  partMesh.instanceMatrix.needsUpdate = true;
-  if (partMesh.instanceColor) partMesh.instanceColor.needsUpdate = true;
-}
+const shockwaves = new Shockwaves(scene);
+const particles = new Particles(scene);
 
 // ---------- controls ----------
 const controls = new OrbitControls(camera, canvas);
@@ -185,26 +167,38 @@ const state = {
   sinkT: 0,
   time: 0,
 };
+const fx = { shake: 0, fovKick: 0, freeze: 0, squash: 0, squashVel: 0, timeScale: 1, yaw: 0 };
 let level = null;
 let ball = makeBall(new THREE.Vector3());
+let shot = newShot();
+let sinkTags = [];
 const lastSafe = new THREE.Vector3();
 const events = [];
 const timers = [];
 let aim = null;
 const touches = new Set();
 const keys = new Set();
+const lastPop = {};
 
 const intro = { fromPos: new THREE.Vector3(), fromTarget: new THREE.Vector3(), toPos: new THREE.Vector3(), toTarget: new THREE.Vector3() };
+
+function newShot(from = new THREE.Vector3()) {
+  return { from: from.clone(), walls: 0, bumpers: 0, airTime: 0, lastAir: -10, lipped: false };
+}
 
 function later(sec, fn) {
   timers.push({ t: sec, fn });
 }
 
+function vibrate(ms) {
+  try { navigator.vibrate?.(ms); } catch { /* not allowed here */ }
+}
+
 // ---------- HUD ----------
 const hud = {
   hole: $('holeNum'), holeTotal: $('holeTotal'), name: $('holeName'), par: $('par'), strokes: $('strokes'),
-  total: $('total'), power: $('power'), powerFill: $('powerFill'), hint: $('hint'), banner: $('banner'),
-  bannerTitle: $('bannerTitle'), bannerSub: $('bannerSub'),
+  total: $('total'), powerTag: $('powerTag'), hint: $('hint'), banner: $('banner'),
+  bannerTitle: $('bannerTitle'), bannerSub: $('bannerSub'), bannerTags: $('bannerTags'), pops: $('pops'),
 };
 hud.holeTotal.textContent = `/${LEVELS.length}`;
 
@@ -225,9 +219,10 @@ function updateHud() {
 }
 
 let bannerTimer = 0;
-function showBanner(title, sub = '', seconds = 1.8, tone = '') {
+function showBanner(title, sub = '', seconds = 1.8, tone = '', tags = []) {
   hud.bannerTitle.textContent = title;
   hud.bannerSub.textContent = sub;
+  hud.bannerTags.replaceChildren(...tags.map((t) => Object.assign(document.createElement('span'), { textContent: t })));
   hud.banner.className = `show ${tone}`;
   bannerTimer = seconds;
 }
@@ -237,10 +232,21 @@ function setHint(text) {
   hud.hint.classList.toggle('hidden', !text);
 }
 
+const _proj = new THREE.Vector3();
+function popAt(text, pos, cls = '', throttleKey = null) {
+  if (throttleKey) {
+    if (state.time - (lastPop[throttleKey] ?? -10) < 0.5) return;
+    lastPop[throttleKey] = state.time;
+  }
+  _proj.copy(pos).project(camera);
+  if (_proj.z > 1) return;
+  popup(hud.pops, text, ((_proj.x + 1) / 2) * window.innerWidth, ((1 - _proj.y) / 2) * window.innerHeight - 34, cls);
+}
+
 function setMode(mode) {
   state.mode = mode;
-  $('modePutt').classList.toggle('active', mode === 'putt');
-  $('modeChip').classList.toggle('active', mode === 'chip');
+  $('modePutt').setAttribute('aria-pressed', String(mode === 'putt'));
+  $('modeChip').setAttribute('aria-pressed', String(mode === 'chip'));
   if (aim) updateAim();
 }
 
@@ -257,9 +263,10 @@ function loadLevel(i) {
   scene.add(level.group);
 
   ball = makeBall(level.tee);
+  shot = newShot(level.tee);
   lastSafe.copy(level.tee);
-  ballMesh.visible = true;
-  ballMesh.scale.setScalar(1);
+  ballPivot.visible = true;
+  trail.reset();
 
   const b = level.bounds;
   const center = b.getCenter(new THREE.Vector3());
@@ -286,7 +293,7 @@ function loadLevel(i) {
   if (state.phase !== 'title') {
     state.phase = 'intro';
     controls.enabled = false;
-    showBanner(`Hole ${i + 1} · ${LEVELS[i].name}`, `Par ${LEVELS[i].par}`, 2.2);
+    showBanner(`Hole ${i + 1}`, `${LEVELS[i].name} · Par ${LEVELS[i].par}`, 1.8);
     setHint('');
   }
   updateHud();
@@ -314,30 +321,45 @@ function onRest() {
   if (state.strokes >= MAX_STROKES) {
     state.phase = 'between';
     state.scores[state.levelIndex] = MAX_STROKES;
-    showBanner('Picked up', `${MAX_STROKES} strokes max`, 1.8, 'bad');
+    showBanner('Picked up', `${MAX_STROKES} strokes max`, 1.6, 'bad');
     updateHud();
-    later(2, nextLevel);
+    later(1.7, nextLevel);
     return;
   }
   state.phase = 'ready';
-  setHint(state.strokes === 0 && state.levelIndex === 0
-    ? 'Pull back anywhere, release to shoot'
-    : '');
+  setHint(state.strokes === 0 && state.levelIndex === 0 ? 'Pull back anywhere, release to shoot' : '');
+}
+
+function launchVelocity(out, dir, power, mode) {
+  const s = MAX_SPEED[mode] * power;
+  if (mode === 'chip') out.set(dir.x * s * Math.cos(CHIP_ANGLE), s * Math.sin(CHIP_ANGLE), dir.z * s * Math.cos(CHIP_ANGLE));
+  else out.set(dir.x * s, 0, dir.z * s);
+  return out;
 }
 
 function shoot({ dir, power }) {
-  const speed = MAX_SPEED[state.mode] * power;
-  if (state.mode === 'chip') {
-    ball.vel.set(dir.x * speed * Math.cos(CHIP_ANGLE), speed * Math.sin(CHIP_ANGLE), dir.z * speed * Math.cos(CHIP_ANGLE));
-  } else {
-    ball.vel.set(dir.x * speed, 0, dir.z * speed);
-  }
+  launchVelocity(ball.vel, dir, power, state.mode);
   lastSafe.copy(ball.pos);
+  shot = newShot(ball.pos);
   state.strokes++;
   state.phase = 'rolling';
   state.rollTime = 0;
   state.restTime = 0;
+
+  const foot = ball.pos.clone();
+  foot.y -= BALL_R - 0.02;
+  shockwaves.spawn(foot, 0.8 + power * 1.8);
+  particles.burst(foot, Math.round(6 + power * 24), ['#5cc24a', '#8fdc6c', '#e9ffe0'], { speed: 1.2 + power * 3.8, lift: 1.5 + power * 4.5, size: 0.08, life: 1 });
+  fx.shake = Math.max(fx.shake, 0.03 + 0.22 * power * power);
+  fx.fovKick = 8 * power;
+  fx.squashVel -= 3 * power;
+  if (power >= 0.995) {
+    fx.freeze = 0.07;
+    popAt('MAX POWER!', ball.pos, 'hot');
+  }
   sfx.hit(power);
+  if (power > 0.55) sfx.whoosh(power);
+  vibrate(10 + power * 25);
   setHint('');
   updateHud();
 }
@@ -345,14 +367,17 @@ function shoot({ dir, power }) {
 function waterHazard() {
   state.phase = 'penalty';
   sfx.splash();
-  burst(new THREE.Vector3(ball.pos.x, WATER_Y + 0.1, ball.pos.z), 40, ['#bfe6ff', '#ffffff', '#7cc4f5'], 2.5, 5);
-  ballMesh.visible = false;
+  const splashAt = new THREE.Vector3(ball.pos.x, WATER_Y + 0.1, ball.pos.z);
+  particles.burst(splashAt, 50, ['#bfe6ff', '#ffffff', '#7cc4f5'], { speed: 2.5, lift: 6, size: 0.14 });
+  shockwaves.spawn(splashAt, 2.5, 0xdff3ff);
+  ballPivot.visible = false;
+  trail.reset();
   state.strokes++;
   updateHud();
-  showBanner('Splash!', '+1 stroke penalty', 1.4, 'bad');
-  later(1.2, () => {
+  showBanner('Splash!', '+1 stroke penalty', 1.2, 'bad');
+  later(0.9, () => {
     ball = makeBall(lastSafe);
-    ballMesh.visible = true;
+    ballPivot.visible = true;
     state.phase = 'rolling';
     state.rollTime = 0;
   });
@@ -363,8 +388,18 @@ function sinkBall() {
   state.phase = 'sinking';
   state.sinkT = 0;
   sinkFrom.copy(ball.pos);
+  const h = level.world.hole;
+  sinkTags = [];
+  if (shot.airTime > 0.2 && state.time - shot.lastAir < 0.2) sinkTags.push('Slam dunk');
+  if (shot.bumpers) sinkTags.push(shot.bumpers > 1 ? `${shot.bumpers}× bumper` : 'Bumper shot');
+  else if (shot.walls > 1) sinkTags.push(`${shot.walls}× bank shot`);
+  else if (shot.walls === 1) sinkTags.push('Bank shot');
+  if (Math.hypot(shot.from.x - h.x, shot.from.z - h.z) > 12) sinkTags.push('Long bomb');
+  shockwaves.spawn(new THREE.Vector3(h.x, h.y + 0.02, h.z), 1.6, 0xffe066);
+  fx.shake = Math.max(fx.shake, 0.08);
   sfx.sink();
-  later(0.55, holeResult);
+  vibrate(30);
+  later(0.45, holeResult);
 }
 
 const TERMS = { '-4': 'Condor!', '-3': 'Albatross!', '-2': 'Eagle!', '-1': 'Birdie!', 0: 'Par', 1: 'Bogey', 2: 'Double Bogey', 3: 'Triple Bogey' };
@@ -376,14 +411,16 @@ function holeResult() {
   const hio = state.strokes === 1;
   const title = hio ? 'HOLE IN ONE!' : TERMS[diff] ?? `+${diff}`;
   const sub = `${state.strokes} stroke${state.strokes === 1 ? '' : 's'} · ${relToPar(diff)}`;
-  showBanner(title, sub, 2.3, diff < 0 || hio ? 'great' : diff === 0 ? '' : 'bad');
-  if (diff < 0 || hio) {
-    sfx.fanfare();
+  const great = diff < 0 || hio;
+  showBanner(title, sub, 2, great ? 'great' : diff === 0 ? '' : 'bad', sinkTags);
+  if (great || sinkTags.length) {
+    if (great) sfx.fanfare();
     const h = level.world.hole;
-    burst(new THREE.Vector3(h.x, h.y + 0.3, h.z), hio ? 160 : 90, ['#ff4d6d', '#ffd23f', '#3bceac', '#4d8bff', '#ffffff'], 4, 9);
+    const n = hio ? 170 : great ? 100 : 45;
+    particles.burst(new THREE.Vector3(h.x, h.y + 0.3, h.z), n, ['#ff4d6d', '#ffd23f', '#3bceac', '#4d8bff', '#ffffff'], { speed: 4, lift: 9 });
   }
   state.phase = 'between';
-  later(2.5, nextLevel);
+  later(2.1, nextLevel);
 }
 
 function nextLevel() {
@@ -425,20 +462,37 @@ function finishRound() {
 
 // ---------- aiming ----------
 const _fwd = new THREE.Vector3();
+const powerColor = new THREE.Color();
 function updateAim(x = aim.x, y = aim.y) {
   aim.x = x;
   aim.y = y;
   const dx = x - aim.sx, dy = y - aim.sy;
   const len = Math.hypot(dx, dy);
-  const full = Math.min(window.innerWidth, window.innerHeight) * 0.32;
+  const full = Math.min(window.innerWidth, window.innerHeight) * FULL_PULL;
+  const prev = aim.power;
   aim.power = Math.min(len / full, 1);
   camera.getWorldDirection(_fwd).setY(0).normalize();
   if (len > 1) {
     // Pulling toward the viewer shoots away from them; pulling left shoots right.
     aim.dir.set(_fwd.x * dy + _fwd.z * dx, 0, _fwd.z * dy - _fwd.x * dx).normalize();
   }
-  hud.powerFill.style.width = `${aim.power * 100}%`;
-  hud.powerFill.style.background = `hsl(${120 - aim.power * 120}, 85%, 52%)`;
+  if (aim.power >= 1 && prev < 1) {
+    sfx.maxPower();
+    vibrate(15);
+  }
+  sfx.chargeSet(aim.power);
+  powerColor.setHSL((120 - aim.power * 120) / 360, 0.9, 0.55);
+
+  const tag = hud.powerTag;
+  const max = aim.power >= 1;
+  tag.textContent = max ? 'MAX' : `${Math.round(aim.power * 100)}%`;
+  tag.classList.toggle('max', max);
+  tag.classList.toggle('hidden', aim.power < 0.04);
+  // Sit beside the finger, on whichever side has room, so it never covers the ball.
+  const side = x + 70 < window.innerWidth - 16 ? 60 : -60;
+  tag.style.left = `${x + side}px`;
+  tag.style.top = `${Math.max(40, y - 44)}px`;
+  tag.style.setProperty('--power', `#${powerColor.getHexString()}`);
   updatePreview();
 }
 
@@ -446,31 +500,40 @@ function cancelAim() {
   aim = null;
   if (state.phase === 'aiming') state.phase = 'ready';
   controls.enabled = true;
-  dots.visible = band.visible = handle.visible = false;
-  hud.power.classList.add('hidden');
+  dots.visible = band.visible = handle.visible = landMarker.visible = false;
+  hud.powerTag.classList.add('hidden');
+  sfx.chargeStop();
 }
 
 const previewBall = makeBall(new THREE.Vector3());
-const _dotColor = new THREE.Color();
+const _m4 = new THREE.Matrix4();
 function updatePreview() {
   const active = aim.power > 0.04;
   dots.visible = band.visible = handle.visible = active;
+  landMarker.visible = false;
+  aimRing.material.uniforms.uPower.value = active ? aim.power : 0;
+  aimRing.material.uniforms.uColor.value.copy(powerColor);
+  aimRing.material.uniforms.uAngle.value = Math.atan2(aim.dir.z, -aim.dir.x);
   if (!active) return;
-  const speed = MAX_SPEED[state.mode] * aim.power;
-  previewBall.pos.copy(ball.pos);
-  if (state.mode === 'chip') previewBall.vel.set(aim.dir.x * speed * Math.cos(CHIP_ANGLE), speed * Math.sin(CHIP_ANGLE), aim.dir.z * speed * Math.cos(CHIP_ANGLE));
-  else previewBall.vel.set(aim.dir.x * speed, 0, aim.dir.z * speed);
-  previewBall.inBoost = false;
 
-  _dotColor.setHSL((120 - aim.power * 120) / 360, 0.9, 0.6);
-  dotMat.color.copy(_dotColor);
-  bandMat.color.copy(_dotColor);
-  const dt = 1 / 120;
-  let n = 0;
-  for (let i = 1; i <= PREVIEW_DOTS * 3 && n < PREVIEW_DOTS; i++) {
-    stepBall(previewBall, level.world, dt, null);
-    if (i % 3 === 0) {
-      const s = 1 - n / PREVIEW_DOTS;
+  previewBall.pos.copy(ball.pos);
+  launchVelocity(previewBall.vel, aim.dir, aim.power, state.mode);
+  previewBall.inBoost = false;
+  previewBall.grounded = false;
+  dotMat.color.copy(powerColor);
+  bandMat.color.copy(powerColor);
+
+  let n = 0, airborne = 0, landed = false;
+  for (let i = 1; i <= PREVIEW_DOTS * PREVIEW_STRIDE && n < PREVIEW_DOTS; i++) {
+    stepBall(previewBall, level.world, PREVIEW_DT, null);
+    if (!previewBall.grounded) airborne += PREVIEW_DT;
+    else if (!landed && airborne > 0.1) {
+      landed = true;
+      landMarker.visible = true;
+      landMarker.position.set(previewBall.pos.x, previewBall.pos.y - BALL_R + 0.02, previewBall.pos.z);
+    }
+    if (i % PREVIEW_STRIDE === 0) {
+      const s = 1 - (n / PREVIEW_DOTS) * 0.7;
       _m4.makeScale(s, s, s).setPosition(previewBall.pos);
       dots.setMatrixAt(n++, _m4);
     }
@@ -478,11 +541,12 @@ function updatePreview() {
   dots.count = n;
   dots.instanceMatrix.needsUpdate = true;
 
-  const pull = ball.pos.clone().addScaledVector(aim.dir, -0.5 - aim.power * 2.2);
+  const pull = ball.pos.clone().addScaledVector(aim.dir, -0.5 - aim.power * 2.4);
   handle.position.copy(pull);
   band.position.copy(ball.pos);
   band.lookAt(pull);
-  band.scale.set(1, 1, ball.pos.distanceTo(pull));
+  const thick = 1.6 - aim.power * 0.9;
+  band.scale.set(thick, thick, ball.pos.distanceTo(pull));
 }
 
 canvas.addEventListener('pointerdown', (e) => {
@@ -501,7 +565,7 @@ canvas.addEventListener('pointerdown', (e) => {
   aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, power: 0, dir: new THREE.Vector3() };
   state.phase = 'aiming';
   controls.enabled = false;
-  hud.power.classList.remove('hidden');
+  sfx.chargeStart();
   updateAim();
 }, { capture: true });
 
@@ -512,17 +576,17 @@ window.addEventListener('pointermove', (e) => {
 function endPointer(e) {
   touches.delete(e.pointerId);
   if (!aim || e.pointerId !== aim.id) return;
-  const ready = aim.power > 0.04 && state.phase === 'aiming' && e.type === 'pointerup';
-  const shot = { dir: aim.dir.clone(), power: aim.power };
+  const fire = aim.power > 0.04 && state.phase === 'aiming' && e.type === 'pointerup';
+  const s = { dir: aim.dir.clone(), power: aim.power };
   cancelAim();
-  if (ready) shoot(shot);
+  if (fire) shoot(s);
 }
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
-  if (e.repeat) return;
+  if (e.repeat || locker.isOpen) return;
   keys.add(e.code);
   if (e.code === 'Escape' && aim) cancelAim();
   if (e.code === 'KeyC' || e.code === 'Space') {
@@ -573,15 +637,50 @@ $('again').addEventListener('click', () => { sfx.unlock(); startRound(); });
   if (best != null) $('titleBest').textContent = `Personal best: ${best} strokes`;
 }
 
+const locker = createLocker({
+  style: ballStyle,
+  material: ballMat,
+  onChange: (style, key) => {
+    applyBallStyle(key);
+    saveStyle(style);
+    sfx.click();
+  },
+  onOpen: () => { if (aim) cancelAim(); },
+});
+for (const id of ['ballBtn', 'titleBall']) {
+  $(id).addEventListener('click', () => { sfx.unlock(); locker.show(); });
+}
+
 // ---------- simulation ----------
 function handleEvents() {
   for (const ev of events) {
     if (ev.type === 'bumper') {
-      sfx.bumper();
+      shot.bumpers++;
       ev.collider.flash = 1;
-    } else if (ev.type === 'wall') sfx.bounce(ev.strength);
-    else if (ev.type === 'ground') sfx.thud(ev.strength);
-    else if (ev.type === 'boost') sfx.boost();
+      sfx.bumper();
+      fx.shake = Math.max(fx.shake, 0.07);
+      particles.burst(ball.pos, 8, ['#ff4d6d', '#ffffff'], { speed: 3, lift: 2, size: 0.07, life: 0.6 });
+      popAt('Boing!', ball.pos, 'boing', 'bumper');
+    } else if (ev.type === 'wall') {
+      if (ev.strength > 2) shot.walls++;
+      sfx.bounce(ev.strength);
+      if (ev.strength > 6) {
+        fx.shake = Math.max(fx.shake, Math.min(0.12, ev.strength * 0.008));
+        particles.burst(ball.pos, 5, ['#ffffff', '#fff3b0'], { speed: 2.5, lift: 1.5, size: 0.06, life: 0.5 });
+      }
+    } else if (ev.type === 'ground') {
+      sfx.thud(ev.strength);
+      fx.squashVel += Math.min(4, ev.strength * 0.3);
+      if (ev.strength > 6) {
+        const foot = ball.pos.clone();
+        foot.y -= BALL_R;
+        particles.burst(foot, 8, ['#5cc24a', '#9be27f'], { speed: 1.8, lift: 2, size: 0.07, life: 0.7 });
+        shockwaves.spawn(foot, 0.6 + ev.strength * 0.06);
+      }
+    } else if (ev.type === 'boost') {
+      sfx.boost();
+      popAt('Boost!', ball.pos, 'boost', 'boost');
+    }
   }
   events.length = 0;
 }
@@ -592,15 +691,27 @@ function tick(dt) {
   if (p !== 'ready' && p !== 'aiming' && p !== 'rolling') return;
 
   stepBall(ball, level.world, dt, events);
+  if (!ball.grounded) {
+    shot.airTime += dt;
+    shot.lastAir = state.time;
+  }
   handleEvents();
 
   const h = level.world.hole;
   const hs = Math.hypot(ball.vel.x, ball.vel.z);
   const hd = Math.hypot(ball.pos.x - h.x, ball.pos.z - h.z);
-  if (hd < HOLE_R - 0.04 && Math.abs(ball.pos.y - BALL_R - h.y) < 0.15 && hs < 6) {
-    if (aim) cancelAim();
-    sinkBall();
-    return;
+  const atCupHeight = Math.abs(ball.pos.y - BALL_R - h.y) < 0.15;
+  if (hd < HOLE_R - 0.04 && atCupHeight) {
+    if (hs < CAPTURE_SPEED) {
+      if (aim) cancelAim();
+      sinkBall();
+      return;
+    }
+    if (!shot.lipped && p === 'rolling') {
+      shot.lipped = true;
+      sfx.lipOut();
+      popAt('Too hot!', ball.pos, 'hot');
+    }
   }
   if (ball.pos.y < WATER_Y + 0.5) {
     if (aim) cancelAim();
@@ -610,11 +721,11 @@ function tick(dt) {
 
   const still = ball.grounded && ball.groundNy > 0.99 && hs < 0.15 && Math.abs(ball.vel.y) < 0.5;
   state.restTime = still ? state.restTime + dt : 0;
-  if (state.restTime > 0.25) ball.vel.set(0, 0, 0);
+  if (state.restTime > 0.15) ball.vel.set(0, 0, 0);
 
   if (p === 'rolling') {
     state.rollTime += dt;
-    if (state.restTime > 0.3 || state.rollTime > 25) onRest();
+    if (state.restTime > 0.2 || state.rollTime > 25) onRest();
   } else if (hs > 0.6) {
     // Something (a spinner) knocked the ball while the player was lining up.
     if (aim) cancelAim();
@@ -626,8 +737,15 @@ function tick(dt) {
 // ---------- camera ----------
 const _delta = new THREE.Vector3();
 const _off = new THREE.Vector3();
+const _focus = new THREE.Vector3();
+const _shake = new THREE.Vector3();
 const smooth = (t) => t * t * (3 - 2 * t);
+let baseFov = 55;
+
 function updateCamera(dt) {
+  camera.position.sub(_shake);
+  _shake.set(0, 0, 0);
+
   if (state.phase === 'title') {
     const b = level.bounds.getCenter(new THREE.Vector3());
     const a = state.time * 0.12;
@@ -636,7 +754,7 @@ function updateCamera(dt) {
     return;
   }
   if (state.phase === 'intro') {
-    state.introT += dt / 2.4;
+    state.introT += dt / 1.8;
     const t = smooth(Math.min(state.introT, 1));
     camera.position.lerpVectors(intro.fromPos, intro.toPos, t);
     controls.target.lerpVectors(intro.fromTarget, intro.toTarget, t);
@@ -644,9 +762,20 @@ function updateCamera(dt) {
     if (state.introT >= 1) finishIntro();
     return;
   }
-  const focus = state.phase === 'sinking' || state.phase === 'between' ? level.world.hole : ball.pos;
-  const k = 1 - Math.exp(-5 * dt);
-  _delta.copy(focus).sub(controls.target).multiplyScalar(k);
+
+  const hs = Math.hypot(ball.vel.x, ball.vel.z);
+  if (state.phase === 'sinking' || state.phase === 'between') _focus.copy(level.world.hole);
+  else {
+    // Lead the ball a little so fast shots read as fast instead of the world sliding under a pinned ball.
+    _focus.copy(ball.pos);
+    if (state.phase === 'rolling') {
+      _off.set(ball.vel.x, 0, ball.vel.z).multiplyScalar(0.18);
+      if (_off.length() > 2.5) _off.setLength(2.5);
+      _focus.add(_off);
+    }
+  }
+  const k = 1 - Math.exp(-3.2 * dt);
+  _delta.copy(_focus).sub(controls.target).multiplyScalar(k);
   controls.target.add(_delta);
   camera.position.add(_delta);
 
@@ -656,13 +785,65 @@ function updateCamera(dt) {
     camera.position.copy(controls.target).add(_off);
   }
   controls.update();
+
+  fx.fovKick *= Math.exp(-5 * dt);
+  const fovTarget = baseFov + Math.min(9, state.phase === 'rolling' ? hs * 0.45 : 0) + fx.fovKick;
+  camera.fov += (fovTarget - camera.fov) * (1 - Math.exp(-6 * dt));
+  camera.updateProjectionMatrix();
+
+  if (fx.shake > 0.001) {
+    _shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(fx.shake * 2);
+    camera.position.add(_shake);
+  }
+  fx.shake *= Math.exp(-9 * dt);
 }
 
 // ---------- visuals ----------
+const _axis = new THREE.Vector3(1, 0, 0);
+const _yAxis = new THREE.Vector3(0, 1, 0);
+const _q = new THREE.Quaternion();
+
+function updateBallVisual(dt) {
+  if (state.phase === 'sinking') {
+    state.sinkT += dt;
+    const h = level.world.hole;
+    const t = Math.min(state.sinkT / 0.28, 1);
+    ballPivot.position.set(
+      THREE.MathUtils.lerp(sinkFrom.x, h.x, t),
+      THREE.MathUtils.lerp(sinkFrom.y, h.y - BALL_R * 1.4, smooth(t)),
+      THREE.MathUtils.lerp(sinkFrom.z, h.z, t),
+    );
+    ballPivot.scale.setScalar(1);
+    return;
+  }
+  if (state.phase === 'between') {
+    ballPivot.visible = false;
+    return;
+  }
+  ballPivot.position.copy(ball.pos);
+  const hs = Math.hypot(ball.vel.x, ball.vel.z);
+  if (hs > 0.05) {
+    const yaw = Math.atan2(ball.vel.x, ball.vel.z);
+    // Keep the ball's pattern fixed in the world when the pivot turns to a new heading.
+    _q.setFromAxisAngle(_yAxis, fx.yaw - yaw);
+    ballMesh.quaternion.premultiply(_q);
+    fx.yaw = yaw;
+    ballPivot.rotation.set(0, yaw, 0);
+    if (ball.grounded) ballMesh.quaternion.premultiply(_q.setFromAxisAngle(_axis, (hs * dt) / BALL_R));
+  }
+
+  fx.squashVel += (-320 * fx.squash - 14 * fx.squashVel) * dt;
+  fx.squash = THREE.MathUtils.clamp(fx.squash + fx.squashVel * dt, -0.3, 0.35);
+  const stretch = Math.min(0.2, Math.hypot(hs, ball.grounded ? 0 : ball.vel.y) * 0.008);
+  const side = 1 / Math.sqrt(1 + stretch);
+  ballPivot.scale.set(side * (1 + fx.squash * 0.45), side * (1 - fx.squash), (1 + stretch) * (1 + fx.squash * 0.45));
+}
+
 function updateVisuals(dt) {
   animateCourse(level, state.time, dt);
   clouds.rotation.y += dt * 0.004;
-  updateParticles(dt);
+  particles.update(dt);
+  shockwaves.update(dt);
 
   for (let i = timers.length - 1; i >= 0; i--) {
     timers[i].t -= dt;
@@ -674,33 +855,26 @@ function updateVisuals(dt) {
     if (bannerTimer <= 0) hud.banner.className = '';
   }
 
-  if (state.phase === 'sinking') {
-    state.sinkT += dt;
-    const h = level.world.hole;
-    const t = Math.min(state.sinkT / 0.3, 1);
-    ballMesh.position.set(
-      THREE.MathUtils.lerp(sinkFrom.x, h.x, t),
-      THREE.MathUtils.lerp(sinkFrom.y, h.y - BALL_R * 1.4, smooth(t)),
-      THREE.MathUtils.lerp(sinkFrom.z, h.z, t),
-    );
-  } else if (state.phase !== 'between') {
-    ballMesh.position.copy(ball.pos);
-    // Roll the ball visually around the axis perpendicular to its motion.
-    const hs = Math.hypot(ball.vel.x, ball.vel.z);
-    if (hs > 0.01) {
-      _off.set(ball.vel.z, 0, -ball.vel.x).normalize();
-      ballMesh.rotateOnWorldAxis(_off, (hs * dt) / BALL_R);
-    }
-  }
-  if (state.phase === 'between') ballMesh.visible = false;
+  updateBallVisual(dt);
+  const moving = state.phase === 'rolling' ? ball.vel.length() : 0;
+  trail.update(ball.pos, moving, camera, dt, state.time);
 
   const showRing = state.phase === 'ready' || state.phase === 'aiming';
-  readyRing.visible = showRing;
+  aimRing.visible = showRing;
   if (showRing) {
-    readyRing.position.set(ball.pos.x, ball.pos.y - BALL_R + 0.02, ball.pos.z);
-    const pulse = state.phase === 'ready' ? 1 + Math.sin(state.time * 5) * 0.12 : 1.1;
-    readyRing.scale.setScalar(pulse);
+    aimRing.position.set(ball.pos.x, ball.pos.y - BALL_R + 0.02, ball.pos.z);
+    const u = aimRing.material.uniforms;
+    if (state.phase === 'ready') {
+      u.uPower.value = 0;
+      u.uMax.value = 0;
+      aimRing.scale.setScalar(1 + Math.sin(state.time * 5) * 0.08);
+    } else {
+      const p = u.uPower.value;
+      u.uMax.value = p >= 1 ? 0.5 + 0.5 * Math.sin(state.time * 30) : 0;
+      aimRing.scale.setScalar(1 + p * 0.25);
+    }
   }
+  if (landMarker.visible) landMarker.scale.setScalar(1 + Math.sin(state.time * 8) * 0.12);
 }
 
 // ---------- main loop ----------
@@ -708,7 +882,8 @@ function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
-  camera.fov = w < h ? 70 : 55;
+  baseFov = w < h ? 70 : 55;
+  camera.fov = baseFov;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
@@ -719,10 +894,24 @@ let acc = 0;
 function frame() {
   const dt = Math.min(clock.getDelta(), 1 / 20);
   state.time += dt;
-  acc += dt;
-  while (acc >= STEP) {
-    acc -= STEP;
-    tick(STEP);
+
+  // A touch of slow motion when the ball is about to reach the cup.
+  let slow = 1;
+  if (state.phase === 'rolling') {
+    const h = level.world.hole;
+    const hd = Math.hypot(ball.pos.x - h.x, ball.pos.z - h.z);
+    const hs = Math.hypot(ball.vel.x, ball.vel.z);
+    if (hd < 1.4 && hs > 0.6 && Math.abs(ball.pos.y - BALL_R - h.y) < 0.4) slow = 0.5;
+  }
+  fx.timeScale += (slow - fx.timeScale) * Math.min(1, dt * 10);
+
+  if (fx.freeze > 0) fx.freeze -= dt;
+  else {
+    acc += dt * fx.timeScale;
+    while (acc >= STEP) {
+      acc -= STEP;
+      tick(STEP);
+    }
   }
   updateVisuals(dt);
   updateCamera(dt);
