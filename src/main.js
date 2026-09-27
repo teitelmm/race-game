@@ -157,6 +157,9 @@ controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
 // ---------- game state ----------
 const state = {
   phase: 'title', // title | intro | ready | aiming | rolling | penalty | sinking | between | done
+  session: 'round', // round | practice
+  inFlight: false,
+  showcaseT: 0,
   levelIndex: 0,
   strokes: 0,
   scores: [],
@@ -172,6 +175,7 @@ let level = null;
 let ball = makeBall(new THREE.Vector3());
 let shot = newShot();
 let sinkTags = [];
+let resume = null;
 const lastSafe = new THREE.Vector3();
 const events = [];
 const timers = [];
@@ -299,14 +303,140 @@ function loadLevel(i) {
   updateHud();
 }
 
-function startRound() {
-  state.scores = [];
-  state.phase = 'intro';
-  $('title').classList.add('hidden');
-  $('scorecard').classList.add('hidden');
+const MENUS = ['home', 'holes', 'how', 'scorecard', 'practiceCard'];
+function showOnly(id) {
+  for (const m of MENUS) $(m).classList.toggle('hidden', m !== id);
+}
+
+function enterPlay() {
+  showOnly(null);
   $('hud').classList.remove('hidden');
   $('dock').classList.remove('hidden');
+  state.phase = 'intro';
+}
+
+function startRound() {
+  state.session = 'round';
+  state.scores = [];
+  resume = null;
+  enterPlay();
   loadLevel(0);
+}
+
+function startPractice(i) {
+  state.session = 'practice';
+  state.scores = [];
+  enterPlay();
+  loadLevel(i);
+}
+
+function goHome() {
+  if (aim) cancelAim();
+  const playing = ['intro', 'ready', 'aiming', 'rolling', 'penalty'].includes(state.phase);
+  // A shot still rolling is taken back so resuming replays it from where it was hit.
+  resume = state.session === 'round' && playing
+    ? {
+      levelIndex: state.levelIndex,
+      scores: state.scores.slice(),
+      strokes: state.inFlight ? state.strokes - 1 : state.strokes,
+      pos: (state.inFlight || state.phase === 'penalty' ? lastSafe : ball.pos).clone(),
+      lastSafe: lastSafe.clone(),
+    }
+    : null;
+  state.inFlight = false;
+  timers.length = 0;
+  state.phase = 'title';
+  state.showcaseT = 0;
+  if (!resume) loadLevel(state.levelIndex);
+  controls.enabled = false;
+  setHint('');
+  hud.banner.className = '';
+  $('hud').classList.add('hidden');
+  $('dock').classList.add('hidden');
+  renderHome();
+  showOnly('home');
+}
+
+function resumeRound() {
+  const r = resume;
+  resume = null;
+  state.session = 'round';
+  enterPlay();
+  loadLevel(r.levelIndex);
+  state.scores = r.scores;
+  state.strokes = r.strokes;
+  ball = makeBall(r.pos);
+  lastSafe.copy(r.lastSafe);
+  const away = r.pos.clone().sub(level.world.hole).setY(0).normalize();
+  intro.toTarget.copy(r.pos);
+  intro.toPos.copy(r.pos).addScaledVector(away, 7).add(new THREE.Vector3(0, 4.2, 0));
+  updateHud();
+}
+
+// ---------- persistent stats ----------
+const STATS_KEY = 'slingshot-golf-stats';
+function readStats() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STATS_KEY));
+    if (s && Array.isArray(s.holeBest)) return s;
+  } catch { /* storage unavailable */ }
+  return { holeBest: [], aces: 0, rounds: 0 };
+}
+function writeStats(s) {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch { /* storage unavailable */ }
+}
+function recordHole(i, strokes) {
+  const s = readStats();
+  const prev = s.holeBest[i];
+  const isBest = prev == null || strokes < prev;
+  if (isBest) s.holeBest[i] = strokes;
+  if (strokes === 1) s.aces++;
+  writeStats(s);
+  return { isBest, prev };
+}
+
+function renderHome() {
+  const s = readStats();
+  const best = readBest();
+  const par = LEVELS.reduce((a, l) => a + l.par, 0);
+  const chips = [];
+  if (best != null) chips.push(`Best round <b>${best}</b> (${relToPar(best - par)})`);
+  chips.push(`Holes in one <b>${s.aces}</b>`);
+  chips.push(`Rounds <b>${s.rounds}</b>`);
+  $('homeStats').innerHTML = chips.map((c) => `<span>${c}</span>`).join('');
+  $('homePar').textContent = `Par ${par}`;
+  const r = resume;
+  $('homeResume').classList.toggle('hidden', !r);
+  $('homePlay').classList.toggle('primary', !r);
+  $('homePlayLabel').textContent = r ? 'New round' : 'Play 9 holes';
+  if (r) $('homeResumeSub').textContent = `Hole ${r.levelIndex + 1} · ${r.strokes} stroke${r.strokes === 1 ? '' : 's'}`;
+}
+
+function renderHoleSelect() {
+  const s = readStats();
+  const grid = $('holeGrid');
+  grid.replaceChildren(...LEVELS.map((l, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'hole-card';
+    const best = s.holeBest[i];
+    const badge = best === 1 ? '<em class="ace">Ace</em>' : best != null && best < l.par ? '<em>Under</em>' : '';
+    b.innerHTML = `<span class="num">${i + 1}</span><span class="name">${l.name}</span>` +
+      `<span class="meta">Par ${l.par} · Best ${best ?? '–'}</span>${badge}`;
+    b.addEventListener('click', () => { sfx.unlock(); startPractice(i); });
+    return b;
+  }));
+}
+
+function showPracticeCard(title, sub, bestLine) {
+  state.phase = 'done';
+  $('hud').classList.add('hidden');
+  $('dock').classList.add('hidden');
+  $('pcTitle').textContent = title;
+  $('pcSub').textContent = sub;
+  $('pcBest').textContent = bestLine;
+  $('pcNext').textContent = `Next: Hole ${((state.levelIndex + 1) % LEVELS.length) + 1}`;
+  showOnly('practiceCard');
 }
 
 function finishIntro() {
@@ -318,16 +448,21 @@ function finishIntro() {
 }
 
 function onRest() {
+  state.inFlight = false;
   if (state.strokes >= MAX_STROKES) {
     state.phase = 'between';
     state.scores[state.levelIndex] = MAX_STROKES;
     showBanner('Picked up', `${MAX_STROKES} strokes max`, 1.6, 'bad');
     updateHud();
-    later(1.7, nextLevel);
+    later(1.7, () => {
+      if (state.session === 'practice') showPracticeCard('Picked up', `${MAX_STROKES} strokes max`, 'Give it another go');
+      else nextLevel();
+    });
     return;
   }
   state.phase = 'ready';
-  setHint(state.strokes === 0 && state.levelIndex === 0 ? 'Pull back anywhere, release to shoot' : '');
+  const firstShot = state.strokes === 0 && (state.levelIndex === 0 || state.session === 'practice');
+  setHint(firstShot ? 'Drag the ball back to shoot · drag anywhere else to look around' : '');
 }
 
 function launchVelocity(out, dir, power, mode) {
@@ -342,6 +477,7 @@ function shoot({ dir, power }) {
   lastSafe.copy(ball.pos);
   shot = newShot(ball.pos);
   state.strokes++;
+  state.inFlight = true;
   state.phase = 'rolling';
   state.rollTime = 0;
   state.restTime = 0;
@@ -366,6 +502,7 @@ function shoot({ dir, power }) {
 
 function waterHazard() {
   state.phase = 'penalty';
+  state.inFlight = false;
   sfx.splash();
   const splashAt = new THREE.Vector3(ball.pos.x, WATER_Y + 0.1, ball.pos.z);
   particles.burst(splashAt, 50, ['#bfe6ff', '#ffffff', '#7cc4f5'], { speed: 2.5, lift: 6, size: 0.14 });
@@ -386,6 +523,7 @@ function waterHazard() {
 const sinkFrom = new THREE.Vector3();
 function sinkBall() {
   state.phase = 'sinking';
+  state.inFlight = false;
   state.sinkT = 0;
   sinkFrom.copy(ball.pos);
   const h = level.world.hole;
@@ -407,6 +545,7 @@ function holeResult() {
   const def = LEVELS[state.levelIndex];
   const diff = state.strokes - def.par;
   state.scores[state.levelIndex] = state.strokes;
+  const record = recordHole(state.levelIndex, state.strokes);
   updateHud();
   const hio = state.strokes === 1;
   const title = hio ? 'HOLE IN ONE!' : TERMS[diff] ?? `+${diff}`;
@@ -420,7 +559,14 @@ function holeResult() {
     particles.burst(new THREE.Vector3(h.x, h.y + 0.3, h.z), n, ['#ff4d6d', '#ffd23f', '#3bceac', '#4d8bff', '#ffffff'], { speed: 4, lift: 9 });
   }
   state.phase = 'between';
-  later(2.1, nextLevel);
+  if (state.session === 'practice') {
+    const bestLine = record.isBest
+      ? (record.prev == null ? 'First clear of this hole' : `New best! Was ${record.prev}`)
+      : `Your best: ${record.prev}`;
+    later(2.1, () => showPracticeCard(title, sub, bestLine));
+  } else {
+    later(2.1, nextLevel);
+  }
 }
 
 function nextLevel() {
@@ -442,6 +588,10 @@ function finishRound() {
   if (isBest) {
     try { localStorage.setItem(BEST_KEY, JSON.stringify(total)); } catch { /* storage unavailable */ }
   }
+  const stats = readStats();
+  stats.rounds++;
+  writeStats(stats);
+  resume = null;
   const row = (label, cells, cls = '') => `<tr class="${cls}"><th>${label}</th>${cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
   const scoreCells = state.scores.map((s, i) => {
     const d = s - LEVELS[i].par;
@@ -455,7 +605,8 @@ function finishRound() {
   $('cardTotal').textContent = relToPar(total - par);
   $('cardBest').textContent = isBest ? 'New personal best!' : `Personal best: ${best} (${relToPar(best - par)})`;
   $('cardBest').classList.toggle('pb', isBest);
-  $('scorecard').classList.remove('hidden');
+  showOnly('scorecard');
+  $('hud').classList.add('hidden');
   $('dock').classList.add('hidden');
   if (isBest) sfx.fanfare();
 }
@@ -470,7 +621,8 @@ function updateAim(x = aim.x, y = aim.y) {
   const len = Math.hypot(dx, dy);
   const full = Math.min(window.innerWidth, window.innerHeight) * FULL_PULL;
   const prev = aim.power;
-  aim.power = Math.min(len / full, 1);
+  const raw = len / full;
+  aim.power = raw >= 0.98 ? 1 : raw;
   camera.getWorldDirection(_fwd).setY(0).normalize();
   if (len > 1) {
     // Pulling toward the viewer shoots away from them; pulling left shoots right.
@@ -562,15 +714,39 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0 || state.phase !== 'ready' || touches.size > 1) return;
+  // Only a press on the ball starts a shot; anything else falls through to the camera controls.
+  if (!overBall(e.clientX, e.clientY, e.pointerType === 'touch')) return;
+  e.stopImmediatePropagation();
   aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, power: 0, dir: new THREE.Vector3() };
   state.phase = 'aiming';
   controls.enabled = false;
+  canvas.style.cursor = 'grabbing';
   sfx.chargeStart();
   updateAim();
 }, { capture: true });
 
+const _ballPx = new THREE.Vector3();
+const _edgePx = new THREE.Vector3();
+const _right = new THREE.Vector3();
+function overBall(x, y, touch) {
+  _ballPx.copy(ball.pos).project(camera);
+  if (_ballPx.z > 1) return false;
+  _right.setFromMatrixColumn(camera.matrixWorld, 0);
+  _edgePx.copy(ball.pos).addScaledVector(_right, BALL_R).project(camera);
+  const w = window.innerWidth / 2, h = window.innerHeight / 2;
+  const bx = (_ballPx.x + 1) * w, by = (1 - _ballPx.y) * h;
+  const r = Math.abs(_edgePx.x - _ballPx.x) * w;
+  // Generous grab zone: the ball is small on screen, fingers are not.
+  const grab = Math.max(touch ? 56 : 40, r * 3);
+  return Math.hypot(x - bx, y - by) <= grab;
+}
+
 window.addEventListener('pointermove', (e) => {
   if (aim && e.pointerId === aim.id) updateAim(e.clientX, e.clientY);
+  else if (e.pointerType === 'mouse' && e.target === canvas && !e.buttons) {
+    const hover = state.phase === 'ready' && overBall(e.clientX, e.clientY, false);
+    canvas.style.cursor = hover ? 'grab' : '';
+  }
 });
 
 function endPointer(e) {
@@ -579,6 +755,7 @@ function endPointer(e) {
   const fire = aim.power > 0.04 && state.phase === 'aiming' && e.type === 'pointerup';
   const s = { dir: aim.dir.clone(), power: aim.power };
   cancelAim();
+  canvas.style.cursor = '';
   if (fire) shoot(s);
 }
 window.addEventListener('pointerup', endPointer);
@@ -599,42 +776,54 @@ window.addEventListener('blur', () => keys.clear());
 
 $('modePutt').addEventListener('click', () => { sfx.unlock(); setMode('putt'); sfx.click(); });
 $('modeChip').addEventListener('click', () => { sfx.unlock(); setMode('chip'); sfx.click(); });
-$('play').addEventListener('click', () => { sfx.unlock(); startRound(); });
-$('again').addEventListener('click', () => { sfx.unlock(); startRound(); });
+const onClick = (id, fn) => $(id).addEventListener('click', () => { sfx.unlock(); sfx.click(); fn(); });
+onClick('homePlay', startRound);
+onClick('homeResume', resumeRound);
+onClick('homePractice', () => { renderHoleSelect(); showOnly('holes'); });
+onClick('homeHow', () => showOnly('how'));
+onClick('holesBack', () => showOnly('home'));
+onClick('howBack', () => showOnly('home'));
+onClick('again', startRound);
+onClick('cardHome', goHome);
+onClick('homeBtn', goHome);
+onClick('pcRetry', () => startPractice(state.levelIndex));
+onClick('pcNext', () => startPractice((state.levelIndex + 1) % LEVELS.length));
+onClick('pcHome', goHome);
 {
   const btn = $('restart');
   let armedUntil = 0;
   btn.addEventListener('click', () => {
     if (state.phase === 'title' || state.phase === 'done') return;
     sfx.click();
+    const practice = state.session === 'practice';
     if (performance.now() < armedUntil) {
       armedUntil = 0;
       btn.classList.remove('armed');
-      startRound();
+      if (practice) startPractice(state.levelIndex);
+      else startRound();
       return;
     }
     armedUntil = performance.now() + 3000;
     btn.classList.add('armed');
-    showBanner('Restart round?', 'Tap restart again to go back to hole 1', 3);
+    showBanner(practice ? 'Restart hole?' : 'Restart round?', `Tap restart again to go back to ${practice ? 'the tee' : 'hole 1'}`, 3);
     setTimeout(() => { if (performance.now() >= armedUntil) btn.classList.remove('armed'); }, 3050);
   });
 }
 {
   let muted = false;
   try { muted = localStorage.getItem('slingshot-golf-muted') === '1'; } catch { /* ignore */ }
-  const btn = $('mute');
-  const apply = () => { sfx.setMuted(muted); btn.classList.toggle('muted', muted); btn.setAttribute('aria-pressed', String(muted)); };
+  const btns = document.querySelectorAll('.mute-btn');
+  const apply = () => {
+    sfx.setMuted(muted);
+    btns.forEach((b) => { b.classList.toggle('muted', muted); b.setAttribute('aria-pressed', String(muted)); });
+  };
   apply();
-  btn.addEventListener('click', () => {
+  btns.forEach((b) => b.addEventListener('click', () => {
     sfx.unlock();
     muted = !muted;
     try { localStorage.setItem('slingshot-golf-muted', muted ? '1' : '0'); } catch { /* ignore */ }
     apply();
-  });
-}
-{
-  const best = readBest();
-  if (best != null) $('titleBest').textContent = `Personal best: ${best} strokes`;
+  }));
 }
 
 const locker = createLocker({
@@ -647,7 +836,7 @@ const locker = createLocker({
   },
   onOpen: () => { if (aim) cancelAim(); },
 });
-for (const id of ['ballBtn', 'titleBall']) {
+for (const id of ['ballBtn', 'homeShop']) {
   $(id).addEventListener('click', () => { sfx.unlock(); locker.show(); });
 }
 
@@ -746,13 +935,27 @@ function updateCamera(dt) {
   camera.position.sub(_shake);
   _shake.set(0, 0, 0);
 
+  const w = window.innerWidth, h = window.innerHeight;
   if (state.phase === 'title') {
+    // Home screen: slow orbit, cycling through the course unless a round is waiting to resume.
+    state.showcaseT += dt;
+    if (!resume && state.showcaseT > 9) {
+      state.showcaseT = 0;
+      loadLevel((state.levelIndex + 1) % LEVELS.length);
+    }
     const b = level.bounds.getCenter(new THREE.Vector3());
-    const a = state.time * 0.12;
-    camera.position.set(b.x + Math.cos(a) * 22, b.y + 13, b.z + Math.sin(a) * 22);
+    const size = level.bounds.getSize(new THREE.Vector3());
+    const span = Math.max(size.x, size.z);
+    const a = state.time * 0.1;
+    const r = span * 0.75 + 9;
+    camera.position.set(b.x + Math.cos(a) * r, b.y + span * 0.4 + 6, b.z + Math.sin(a) * r);
     camera.lookAt(b);
+    // Shift the course to the right of the menu on wide screens.
+    if (w > 820) camera.setViewOffset(w, h, -w * 0.2, 0, w, h);
+    else camera.clearViewOffset();
     return;
   }
+  if (camera.view?.enabled) camera.clearViewOffset();
   if (state.phase === 'intro') {
     state.introT += dt / 1.8;
     const t = smooth(Math.min(state.introT, 1));
@@ -920,4 +1123,6 @@ function frame() {
 }
 
 loadLevel(0);
+renderHome();
+showOnly('home');
 requestAnimationFrame(frame);
