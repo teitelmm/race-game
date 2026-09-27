@@ -537,10 +537,24 @@ $('modePutt').addEventListener('click', () => { sfx.unlock(); setMode('putt'); s
 $('modeChip').addEventListener('click', () => { sfx.unlock(); setMode('chip'); sfx.click(); });
 $('play').addEventListener('click', () => { sfx.unlock(); startRound(); });
 $('again').addEventListener('click', () => { sfx.unlock(); startRound(); });
-$('restart').addEventListener('click', () => {
-  if (state.phase === 'title' || state.phase === 'done') return;
-  if (confirm('Restart the round from hole 1?')) startRound();
-});
+{
+  const btn = $('restart');
+  let armedUntil = 0;
+  btn.addEventListener('click', () => {
+    if (state.phase === 'title' || state.phase === 'done') return;
+    sfx.click();
+    if (performance.now() < armedUntil) {
+      armedUntil = 0;
+      btn.classList.remove('armed');
+      startRound();
+      return;
+    }
+    armedUntil = performance.now() + 3000;
+    btn.classList.add('armed');
+    showBanner('Restart round?', 'Tap restart again to go back to hole 1', 3);
+    setTimeout(() => { if (performance.now() >= armedUntil) btn.classList.remove('armed'); }, 3050);
+  });
+}
 {
   let muted = false;
   try { muted = localStorage.getItem('slingshot-golf-muted') === '1'; } catch { /* ignore */ }

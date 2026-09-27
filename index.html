@@ -58,6 +58,8 @@
       display: grid; place-items: center;
     }
     .icon-btn svg { width: 20px; height: 20px; }
+    .icon-btn.armed { background: var(--accent); color: #fff; }
+    .icon-btn:focus-visible, .seg button:focus-visible, .cta:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
     #mute .off { display: none; }
     #mute.muted .on { display: none; }
     #mute.muted .off { display: block; }
